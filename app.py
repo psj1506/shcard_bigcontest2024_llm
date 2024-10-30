@@ -35,14 +35,52 @@ if 'text' not in df.columns:
     st.error("데이터셋에 'text' 컬럼이 없습니다.")
     st.stop()
 
-# Streamlit App UI
+# FAISS 인덱스 로드 함수 정의 (함수는 호출 전에 정의되어야 함)
+def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')):
+    if os.path.exists(index_path):
+        try:
+            index = faiss.read_index(index_path)
+            logging.info(f"FAISS 인덱스 로드 성공: {index_path}")
+            return index
+        except Exception as e:
+            logging.error(f"FAISS 인덱스 로드 실패: {e}")
+            return None
+    else:
+        logging.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
+        return None
 
+# 텍스트 임베딩 생성 함수 정의
+def embed_text(text):
+    try:
+        inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True).to(device)
+        with torch.no_grad():
+            embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
+        return embeddings.squeeze().cpu().numpy()
+    except Exception as e:
+        logging.error(f"임베딩 생성 실패: {e}")
+        return None
+
+# 질문 파싱 함수 정의
+def parse_question(question):
+    """
+    질문을 파싱하여 필터링 기준을 추출합니다.
+    현재는 위치와 연령대를 추출합니다.
+    필요에 따라 추가적인 필터링 기준을 추출하도록 확장할 수 있습니다.
+    """
+    location_match = re.search(r'제주시 한림읍', question)
+    age_group_match = re.search(r'(\d+)대', question)
+    
+    location = location_match.group() if location_match else None
+    age_group = age_group_match.group(1) if age_group_match else None
+    
+    return location, age_group
+
+# Streamlit App UI 설정
 st.set_page_config(page_title="🍊제주도 맛집 추천")
 
 # 사이드바 설정
 with st.sidebar:
     st.title("**🍊제주도 맛집 추천**")
-
     st.write("")
     st.markdown("""
         <style>
@@ -53,7 +91,6 @@ with st.sidebar:
         }
      </style>
      """, unsafe_allow_html=True)
-
     st.sidebar.markdown('<p class="sidebar-text">💵희망 가격대는 어떻게 되시나요??</p>', unsafe_allow_html=True)
 
     price_options = ['👌 상관 없음','😎 최고가', '💸 고가', '💰 평균 가격대', '💵 중저가', '😂 저가']
@@ -121,25 +158,14 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 embedding_model = AutoModel.from_pretrained(model_name).to(device)
 logging.info("임베딩 모델 및 토크나이저 로드 완료.")
 
-# 질문 파싱 함수
-def parse_question(question):
-    """
-    질문을 파싱하여 필터링 기준을 추출합니다.
-    현재는 위치와 연령대를 추출합니다.
-    필요에 따라 추가적인 필터링 기준을 추출하도록 확장할 수 있습니다.
-    """
-    location_match = re.search(r'제주시 한림읍', question)
-    age_group_match = re.search(r'(\d+)대', question)
-    
-    location = location_match.group() if location_match else None
-    age_group = age_group_match.group(1) if age_group_match else None
-    
-    return location, age_group
-
 # FAISS 인덱스 로드
 try:
     faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
-    logging.info("FAISS 인덱스 로드 완료.")
+    if faiss_index is not None:
+        logging.info("FAISS 인덱스 로드 완료.")
+    else:
+        st.error("FAISS 인덱스 로드에 실패했습니다.")
+        st.stop()
 except FileNotFoundError as e:
     st.error(str(e))
     st.stop()
@@ -147,18 +173,7 @@ except Exception as e:
     st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
     st.stop()
 
-# 텍스트 임베딩 생성
-def embed_text(text):
-    try:
-        inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True).to(device)
-        with torch.no_grad():
-            embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
-        return embeddings.squeeze().cpu().numpy()
-    except Exception as e:
-        logging.error(f"임베딩 생성 실패: {e}")
-        return None
-
-# FAISS를 활용한 응답 생성
+# FAISS를 활용한 응답 생성 함수 정의
 def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3, print_prompt=True):
     location, age_group = parse_question(question)
     
@@ -180,7 +195,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
         }
         if price in price_filter:
             if isinstance(price_filter[price], tuple):
-                # startswith expects a single string or tuple of strings
+                # startswith expects a tuple of strings
                 filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
             else:
                 filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
@@ -214,7 +229,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
     
     # 검색된 카페들 선택
     try:
-        top_cafes = df.iloc[indices[0]].copy()
+        top_cafes = filtered_df.iloc[indices[0]].copy()
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
     except IndexError as e:
         logging.error(f"인덱스 초과 오류: {e}")
@@ -273,4 +288,3 @@ if prompt := st.chat_input():
         # 로그 기록
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")
-
