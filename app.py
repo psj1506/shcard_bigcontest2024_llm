@@ -13,8 +13,6 @@ import re
 data_path = './data'
 module_path = './modules'
 
-
-
 # 로그 설정
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
@@ -31,6 +29,11 @@ text_tour = df_tour['text'].tolist()
 
 # 최신연월 데이터만 사용
 df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
+
+# 'text' 컬럼 존재 확인
+if 'text' not in df.columns:
+    st.error("데이터셋에 'text' 컬럼이 없습니다.")
+    st.stop()
 
 # Streamlit App UI
 
@@ -110,30 +113,13 @@ st.sidebar.button('대화 초기화 🔄', on_click=clear_chat_history)
 
 # 디바이스 설정
 device = "cuda" if torch.cuda.is_available() else "cpu"
+logging.info(f"디바이스 설정: {device}")
 
 # Hugging Face 임베딩 모델 및 토크나이저 로드
 model_name = "jhgan/ko-sroberta-multitask"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 embedding_model = AutoModel.from_pretrained(model_name).to(device)
-
-# FAISS 인덱스 로드 함수
-def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')):
-    if os.path.exists(index_path):
-        index = faiss.read_index(index_path)
-        return index
-    else:
-        raise FileNotFoundError(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
-
-# 텍스트 임베딩 생성
-def embed_text(text):
-    inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True).to(device)
-    with torch.no_grad():
-        embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
-    return embeddings.squeeze().cpu().numpy()
-
-# 텍스트 임베딩 로드
-embeddings = np.load(os.path.join(module_path, 'embeddings_array_file_1.npy'))
-embeddings_tour = np.load(os.path.join(module_path, 'embeddings_tour_array_file_1.npy'))
+logging.info("임베딩 모델 및 토크나이저 로드 완료.")
 
 # 질문 파싱 함수
 def parse_question(question):
@@ -150,8 +136,30 @@ def parse_question(question):
     
     return location, age_group
 
+# FAISS 인덱스 로드
+try:
+    faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
+    logging.info("FAISS 인덱스 로드 완료.")
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+except Exception as e:
+    st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
+    st.stop()
+
+# 텍스트 임베딩 생성
+def embed_text(text):
+    try:
+        inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True).to(device)
+        with torch.no_grad():
+            embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
+        return embeddings.squeeze().cpu().numpy()
+    except Exception as e:
+        logging.error(f"임베딩 생성 실패: {e}")
+        return None
+
 # FAISS를 활용한 응답 생성
-def generate_response_with_faiss(question, df, embeddings, model, df_tour, embeddings_tour, k=3, print_prompt=True):
+def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3, print_prompt=True):
     location, age_group = parse_question(question)
     
     if not location:
@@ -159,6 +167,7 @@ def generate_response_with_faiss(question, df, embeddings, model, df_tour, embed
     
     # 위치에 따라 데이터 필터링
     filtered_df = df[df['가맹점주소'].str.contains(location)].copy()
+    logging.info(f"위치 필터링 완료: {location}, 필터링된 데이터 수: {len(filtered_df)}")
     
     # 가격대 필터링 로직 수정
     if price != '상관 없음':
@@ -175,40 +184,50 @@ def generate_response_with_faiss(question, df, embeddings, model, df_tour, embed
                 filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
             else:
                 filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
+            logging.info(f"가격대 필터링 완료: {price}, 필터링된 데이터 수: {len(filtered_df)}")
     
-    # FAISS 인덱스 재구성 (필터링된 데이터로)
     if len(filtered_df) == 0:
         return "질문과 일치하는 가게가 없습니다."
     
-    # 텍스트 컬럼이 있는지 확인
+    # 'text' 컬럼 확인
     if 'text' not in filtered_df.columns:
         return "데이터셋에 'text' 컬럼이 없습니다."
     
-    # 임베딩 생성 (필터링된 데이터)
-    filtered_embeddings = np.array([embed_text(text) for text in filtered_df['text']])
+    # 임베딩 생성
+    query_embedding = embed_text(question)
+    if query_embedding is None:
+        return "질문에 대한 임베딩을 생성할 수 없습니다."
     
-    # FAISS 인덱스 생성
-    dimension = filtered_embeddings.shape[1]
-    faiss_index = faiss.IndexFlatL2(dimension)
-    faiss_index.add(filtered_embeddings)
+    query_embedding = query_embedding.reshape(1, -1).astype('float32')
     
     # FAISS 검색
-    query_embedding = embed_text(question).reshape(1, -1)
-    distances, indices = faiss_index.search(query_embedding, k)
+    try:
+        distances, indices = faiss_index.search(query_embedding, k)
+        logging.info(f"FAISS 검색 완료: {k}개 결과")
+    except Exception as e:
+        logging.error(f"FAISS 검색 실패: {e}")
+        return "FAISS 검색 중 오류가 발생했습니다."
     
     # 검색 결과가 없는 경우
     if indices.size == 0:
         return "질문과 일치하는 가게가 없습니다."
     
     # 검색된 카페들 선택
-    top_cafes = filtered_df.iloc[indices[0, :]].copy()
+    try:
+        top_cafes = df.iloc[indices[0]].copy()
+        logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
+    except IndexError as e:
+        logging.error(f"인덱스 초과 오류: {e}")
+        return "검색된 결과가 없습니다."
     
     # 가장 높은 30대 이용 비중을 가진 카페 선택
     if not top_cafes.empty:
         top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
         reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
+        logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
     else:
         reference_info = "질문과 일치하는 가게가 없습니다."
+        logging.info("검색된 카페가 없습니다.")
     
     # 관광지 정보 필터링 (필요 시 수정 가능)
     reference_tour = "\n".join(df_tour['text'].iloc[:1])  # 예시: 첫 번째 관광지 정보
@@ -225,12 +244,18 @@ def generate_response_with_faiss(question, df, embeddings, model, df_tour, embed
 응답:"""
     
     if print_prompt:
-        print('-----------------------------' * 3)
-        print(prompt)
-        print('-----------------------------' * 3)
+        st.write('-----------------------------' * 3)
+        st.write(prompt)
+        st.write('-----------------------------' * 3)
     
-    response = model.generate_content(prompt)
-    return response.text if hasattr(response, 'text') else response
+    # 모델 응답 생성
+    try:
+        response = model.generate_content(prompt)
+        logging.info("모델 응답 생성 완료.")
+        return response.text if hasattr(response, 'text') else response
+    except Exception as e:
+        logging.error(f"모델 응답 생성 실패: {e}")
+        return "모델 응답 생성 중 오류가 발생했습니다."
 
 # 사용자 입력 처리 및 응답 생성
 if prompt := st.chat_input():
@@ -241,12 +266,11 @@ if prompt := st.chat_input():
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("생각 중..."):
-                response = generate_response_with_faiss(prompt, df, embeddings, model, df_tour, embeddings_tour)
+                response = generate_response_with_faiss(prompt, df, faiss_index, model, df_tour, k=3)
                 st.write(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
         
         # 로그 기록
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")
-
 
