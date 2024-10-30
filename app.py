@@ -249,17 +249,4 @@ if prompt := st.chat_input():
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")
 
-# 피드백 폼 추가
-def get_feedback():
-    st.sidebar.header("💬 피드백")
-    feedback = st.sidebar.text_area("추천에 대한 피드백을 남겨주세요.")
-    if st.sidebar.button("제출"):
-        if feedback:
-            with open("feedback.log", "a", encoding="utf-8") as f:
-                f.write(f"Feedback: {feedback}\n")
-            st.sidebar.success("피드백이 제출되었습니다. 감사합니다!")
-        else:
-            st.sidebar.warning("피드백을 입력해주세요.")
 
-# 피드백 폼 호출
-get_feedback()
