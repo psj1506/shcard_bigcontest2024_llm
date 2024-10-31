@@ -222,9 +222,13 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         return "질문과 일치하는 가게가 없습니다."
     
     # 가장 높은 30대 이용 비중을 가진 카페 선택
-    top_cafe = filtered_top_cafes.loc[filtered_top_cafes['최근12개월30대회원수비중'].idxmax()]
-    reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
-    logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
+    try:
+        top_cafe = filtered_top_cafes.loc[filtered_top_cafes['최근12개월30대회원수비중'].idxmax()]
+        reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
+        logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
+    except Exception as e:
+        logging.error(f"30대 비중 기준 카페 선택 실패: {e}")
+        return "가장 적합한 가게를 찾는 중 오류가 발생했습니다."
     
     # 관광지 정보 필터링 (필요 시 수정 가능)
     reference_tour = "\n".join(df_tour['text'].iloc[:1])  # 예시: 첫 번째 관광지 정보
@@ -270,4 +274,3 @@ if prompt := st.chat_input():
         # 로그 기록
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")   
-
