@@ -9,7 +9,6 @@ import google.generativeai as genai
 import logging
 import re
 
-
 # 경로 설정
 data_path = './data'
 module_path = './modules'
@@ -18,8 +17,7 @@ module_path = './modules'
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
-
-# 디바이스 설정
+# 디바이스 설정 (기존 코드 그대로 유지)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Gemini 모델 설정 (보안 강화)
@@ -212,7 +210,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.info(f"FAISS 검색 완료: {k}개 결과")
         logging.info(f"Distances: {distances}")
         logging.info(f"Indices: {indices}")
-    except Exception as e:
+    except Exception as e:  # 예외 처리 수정
         logging.error(f"FAISS 검색 실패: {e}")
         return "FAISS 검색 중 오류가 발생했습니다."
     
