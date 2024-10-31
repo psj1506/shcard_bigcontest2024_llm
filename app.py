@@ -8,6 +8,7 @@ import streamlit as st
 import google.generativeai as genai
 import logging
 import re
+import pynvml  # GPU 메모리 확인을 위한 라이브러리 추가
 
 # 경로 설정
 data_path = './data'
@@ -17,12 +18,36 @@ module_path = './modules'
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
-# Gemini 모델 설정
+# GPU 메모리 확인 함수
+def get_available_gpu_memory():
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 첫 번째 GPU
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        available_memory = info.free / (1024 ** 3)  # GB 단위
+        pynvml.nvmlShutdown()
+        return available_memory
+    except Exception as e:
+        logging.error(f"GPU 메모리 확인 실패: {e}")
+        return 0
+
+# 디바이스 설정 최적화
+available_memory = get_available_gpu_memory()
+required_memory = 2  # 예: 모델 실행에 필요한 최소 메모리 (GB 단위)
+
+if torch.cuda.is_available() and available_memory > required_memory:
+    device = "cuda"
+    logging.info("GPU 사용 설정됨.")
+else:
+    device = "cpu"
+    logging.info("CPU 사용 설정됨.")
+
+# Gemini 모델 설정 (보안 강화)
 GOOGLE_API_KEY = st.secrets["API_KEY"]
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# 데이터 로드
+# 데이터 로드 및 필터링
 df = pd.read_csv(os.path.join(data_path, "JEJU_DATA.csv"), encoding='cp949')
 df_tour = pd.read_csv(os.path.join(data_path, "JEJU_TOUR.csv"), encoding='cp949')
 text_tour = df_tour['text'].tolist()
@@ -33,6 +58,17 @@ df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(dro
 # 'text' 컬럼 존재 확인
 if 'text' not in df.columns:
     st.error("데이터셋에 'text' 컬럼이 없습니다.")
+    st.stop()
+
+# 임베딩 모델 및 토크나이저 로드
+model_name = "jhgan/ko-sroberta-multitask"
+try:
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    embedding_model = AutoModel.from_pretrained(model_name).to(device)
+    logging.info("임베딩 모델 및 토크나이저 로드 완료.")
+except Exception as e:
+    logging.error(f"임베딩 모델 로드 실패: {e}")
+    st.error("임베딩 모델 로드 중 오류가 발생했습니다.")
     st.stop()
 
 # FAISS 인덱스 로드 함수 정의
@@ -48,6 +84,21 @@ def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')
     else:
         logging.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
         return None
+
+# FAISS 인덱스 로드
+try:
+    faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
+    if faiss_index is not None:
+        logging.info("FAISS 인덱스 로드 완료.")
+    else:
+        st.error("FAISS 인덱스 로드에 실패했습니다.")
+        st.stop()
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+except Exception as e:
+    st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
+    st.stop()
 
 # 텍스트 임베딩 생성 함수 정의
 def embed_text(text):
@@ -148,31 +199,6 @@ def clear_chat_history():
     st.session_state.messages = [{"role": "assistant", "content": "어떤 식당 찾으시나요?? 위치, 업종 등을 알려주시면 최고의 맛집 추천해드릴게요!"}]
 st.sidebar.button('대화 초기화 🔄', on_click=clear_chat_history)
 
-# 디바이스 설정
-device = "cuda" if torch.cuda.is_available() else "cpu"
-logging.info(f"디바이스 설정: {device}")
-
-# Hugging Face 임베딩 모델 및 토크나이저 로드
-model_name = "jhgan/ko-sroberta-multitask"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-embedding_model = AutoModel.from_pretrained(model_name).to(device)
-logging.info("임베딩 모델 및 토크나이저 로드 완료.")
-
-# FAISS 인덱스 로드
-try:
-    faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
-    if faiss_index is not None:
-        logging.info("FAISS 인덱스 로드 완료.")
-    else:
-        st.error("FAISS 인덱스 로드에 실패했습니다.")
-        st.stop()
-except FileNotFoundError as e:
-    st.error(str(e))
-    st.stop()
-except Exception as e:
-    st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
-    st.stop()
-
 # FAISS를 활용한 응답 생성 함수 정의
 def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10, print_prompt=True):
     location, age_group = parse_question(question)
@@ -186,14 +212,20 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         return "질문에 대한 임베딩을 생성할 수 없습니다."
     
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
+    logging.info(f"Query Embedding Shape: {query_embedding.shape}, Type: {query_embedding.dtype}")
     
     # FAISS 검색 (전체 필터링된 df에 대해 검색)
     try:
         distances, indices = faiss_index.search(query_embedding, k)
         logging.info(f"FAISS 검색 완료: {k}개 결과")
+        logging.info(f"Distances: {distances}")
+        logging.info(f"Indices: {indices}")
+    except faiss.FaissException as e:
+        logging.error(f"FAISS 검색 실패 (FaissException): {e}")
+        return "FAISS 검색 중 오류가 발생했습니다. (FaissException)"
     except Exception as e:
-        logging.error(f"FAISS 검색 실패: {e}")
-        return "FAISS 검색 중 오류가 발생했습니다."
+        logging.error(f"FAISS 검색 실패 (Exception): {e}")
+        return "FAISS 검색 중 오류가 발생했습니다. (Exception)"
     
     # 검색 결과가 없는 경우
     if indices.size == 0:
@@ -217,6 +249,8 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         filtered_top_cafes = top_cafes[
             top_cafes['가맹점주소'].str.contains(location)
         ]
+    
+    logging.info(f"Filtered Top Cafes Count: {len(filtered_top_cafes)}")
     
     if filtered_top_cafes.empty:
         return "질문과 일치하는 가게가 없습니다."
