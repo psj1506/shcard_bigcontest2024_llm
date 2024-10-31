@@ -19,17 +19,8 @@ logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO,
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
 
-
-# 디바이스 설정 최적화
-available_memory = get_available_gpu_memory()
-required_memory = 2  # 예: 모델 실행에 필요한 최소 메모리 (GB 단위)
-
-if torch.cuda.is_available() and available_memory > required_memory:
-    device = "cuda"
-    logging.info("GPU 사용 설정됨.")
-else:
-    device = "cpu"
-    logging.info("CPU 사용 설정됨.")
+# 디바이스 설정
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Gemini 모델 설정 (보안 강화)
 GOOGLE_API_KEY = st.secrets["API_KEY"]
