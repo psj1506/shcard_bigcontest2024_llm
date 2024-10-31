@@ -68,6 +68,7 @@ try:
     faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
     if faiss_index is not None:
         logging.info("FAISS 인덱스 로드 완료.")
+        st.write("FAISS 인덱스 로드 완료.")
     else:
         st.error("FAISS 인덱스 로드에 실패했습니다.")
         st.stop()
@@ -78,6 +79,11 @@ except Exception as e:
     st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
     st.stop()
 
+# FAISS 인덱스와 임베딩 차원 확인
+faiss_dim = faiss_index.d
+st.write(f"FAISS 인덱스 차원: {faiss_dim}")
+logging.info(f"FAISS 인덱스 차원: {faiss_dim}")
+
 # 텍스트 임베딩 생성 함수 정의
 def embed_text(text):
     try:
@@ -87,6 +93,7 @@ def embed_text(text):
         return embeddings.squeeze().cpu().numpy()
     except Exception as e:
         logging.error(f"임베딩 생성 실패: {e}")
+        st.error(f"임베딩 생성 실패: {e}")  # 디버깅용
         return None
 
 # 질문 파싱 함수 정의
@@ -201,6 +208,13 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
     if query_embedding is None:
         return "질문에 대한 임베딩을 생성할 수 없습니다."
     
+    # 임베딩 차원 확인
+    embedding_dim = query_embedding.shape[0]
+    if embedding_dim != faiss_index.d:
+        logging.error(f"임베딩 차원({embedding_dim})과 FAISS 인덱스 차원({faiss_index.d})이 일치하지 않습니다.")
+        st.error(f"임베딩 차원({embedding_dim})과 FAISS 인덱스 차원({faiss_index.d})이 일치하지 않습니다.")
+        return "임베딩 차원이 FAISS 인덱스와 일치하지 않습니다."
+    
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
     logging.info(f"Query Embedding Shape: {query_embedding.shape}, Type: {query_embedding.dtype}")
     
@@ -212,6 +226,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.info(f"Indices: {indices}")
     except Exception as e:  # 예외 처리 수정
         logging.error(f"FAISS 검색 실패: {e}")
+        st.error(f"FAISS 검색 중 오류가 발생했습니다: {e}")  # 디버깅용
         return "FAISS 검색 중 오류가 발생했습니다."
     
     # 검색 결과가 없는 경우
@@ -224,6 +239,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
     except IndexError as e:
         logging.error(f"인덱스 초과 오류: {e}")
+        st.error(f"인덱스 초과 오류: {e}")  # 디버깅용
         return "검색된 결과가 없습니다."
     
     # 추가 필터링
@@ -253,6 +269,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
     except Exception as e:
         logging.error(f"30대 비중 기준 카페 선택 실패: {e}")
+        st.error(f"30대 비중 기준 카페 선택 실패: {e}")  # 디버깅용
         return "가장 적합한 가게를 찾는 중 오류가 발생했습니다."
     
     # 관광지 정보 필터링 (필요 시 수정 가능)
@@ -281,6 +298,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         return response.text if hasattr(response, 'text') else response
     except Exception as e:
         logging.error(f"모델 응답 생성 실패: {e}")
+        st.error(f"모델 응답 생성 실패: {e}")  # 디버깅용
         return "모델 응답 생성 중 오류가 발생했습니다."
 
 # 사용자 입력 처리 및 응답 생성
@@ -298,4 +316,4 @@ if prompt := st.chat_input():
         
         # 로그 기록
         logging.info(f"Question: {prompt}")
-        logging.info(f"Answer: {response}")   
+        logging.info(f"Answer: {response}")
