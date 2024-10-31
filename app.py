@@ -180,35 +180,6 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
     if not location:
         return "질문에서 위치 정보를 찾을 수 없습니다. 다시 입력해주세요."
     
-    # 가격대 필터링 (전체 df에 대해 적용)
-    if price != '상관 없음':
-        price_filter = {
-            '최고가': '6',
-            '고가': '5',
-            '평균 가격대': ('3', '4'),
-            '중저가': '2',
-            '저가': '1'
-        }
-        if price in price_filter:
-            if isinstance(price_filter[price], tuple):
-                # 여러 조건을 OR로 결합
-                filtered_df = df[df['건당평균이용금액구간'].str.startswith(price_filter[price][0]) |
-                                df['건당평균이용금액구간'].str.startswith(price_filter[price][1])]
-            else:
-                filtered_df = df[df['건당평균이용금액구간'].str.startswith(price_filter[price])]
-            logging.info(f"가격대 필터링 완료: {price}, 필터링된 데이터 수: {len(filtered_df)}")
-        else:
-            filtered_df = df.copy()
-    else:
-        filtered_df = df.copy()
-    
-    if filtered_df.empty:
-        return "질문과 일치하는 가게가 없습니다."
-    
-    # 'text' 컬럼 확인
-    if 'text' not in filtered_df.columns:
-        return "데이터셋에 'text' 컬럼이 없습니다."
-    
     # 임베딩 생성
     query_embedding = embed_text(question)
     if query_embedding is None:
@@ -216,7 +187,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
     
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
     
-    # FAISS 검색 (전체 df에 대해 검색)
+    # FAISS 검색 (전체 필터링된 df에 대해 검색)
     try:
         distances, indices = faiss_index.search(query_embedding, k)
         logging.info(f"FAISS 검색 완료: {k}개 결과")
@@ -228,7 +199,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
     if indices.size == 0:
         return "질문과 일치하는 가게가 없습니다."
     
-    # 검색된 카페들 선택 (전체 df 기준)
+    # 검색된 카페들 선택 (필터링된 df 기준)
     try:
         top_cafes = df.iloc[indices[0]].copy()
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
@@ -236,14 +207,22 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.error(f"인덱스 초과 오류: {e}")
         return "검색된 결과가 없습니다."
     
-    # 검색된 결과 중 위치에 맞는 카페 필터링
-    top_cafes = top_cafes[top_cafes['가맹점주소'].str.contains(location)]
+    # 위치 및 가격대에 따른 추가 필터링
+    if price != '상관 없음':
+        filtered_top_cafes = top_cafes[
+            top_cafes['가맹점주소'].str.contains(location) &
+            top_cafes['건당평균이용금액구간'].str.startswith(price_mapping.get(selected_price, '상관 없음'))
+        ]
+    else:
+        filtered_top_cafes = top_cafes[
+            top_cafes['가맹점주소'].str.contains(location)
+        ]
     
-    if top_cafes.empty:
+    if filtered_top_cafes.empty:
         return "질문과 일치하는 가게가 없습니다."
     
     # 가장 높은 30대 이용 비중을 가진 카페 선택
-    top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
+    top_cafe = filtered_top_cafes.loc[filtered_top_cafes['최근12개월30대회원수비중'].idxmax()]
     reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
     logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
     
@@ -291,5 +270,4 @@ if prompt := st.chat_input():
         # 로그 기록
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")   
-
 
