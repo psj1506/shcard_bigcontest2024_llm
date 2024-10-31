@@ -35,7 +35,7 @@ if 'text' not in df.columns:
     st.error("데이터셋에 'text' 컬럼이 없습니다.")
     st.stop()
 
-# FAISS 인덱스 로드 함수 정의 (함수는 호출 전에 정의되어야 함)
+# FAISS 인덱스 로드 함수 정의
 def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')):
     if os.path.exists(index_path):
         try:
@@ -227,9 +227,15 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
     if indices.size == 0:
         return "질문과 일치하는 가게가 없습니다."
     
-    # 검색된 카페들 선택
+    # 검색된 카페들 선택 (filtered_df를 사용)
     try:
-        top_cafes = filtered_df.iloc[indices[0]].copy()
+        # FAISS 인덱스는 filtered_df에 기반하여 구축되었으므로, indices는 filtered_df의 인덱스를 가리킴
+        # 인덱스가 filtered_df의 범위를 벗어나지 않도록 확인
+        if (indices >= len(filtered_df)).any():
+            logging.error("FAISS 검색 결과의 인덱스가 filtered_df의 범위를 벗어났습니다.")
+            return "검색된 결과가 데이터 범위를 벗어났습니다."
+        
+        top_cafes = filtered_df.iloc[indices[0, :]].copy()
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
     except IndexError as e:
         logging.error(f"인덱스 초과 오류: {e}")
@@ -288,3 +294,4 @@ if prompt := st.chat_input():
         # 로그 기록
         logging.info(f"Question: {prompt}")
         logging.info(f"Answer: {response}")
+
