@@ -8,7 +8,7 @@ import streamlit as st
 import google.generativeai as genai
 import logging
 import re
-import pynvml  # GPU 메모리 확인을 위한 라이브러리 추가
+
 
 # 경로 설정
 data_path = './data'
@@ -18,18 +18,7 @@ module_path = './modules'
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
-# GPU 메모리 확인 함수
-def get_available_gpu_memory():
-    try:
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 첫 번째 GPU
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        available_memory = info.free / (1024 ** 3)  # GB 단위
-        pynvml.nvmlShutdown()
-        return available_memory
-    except Exception as e:
-        logging.error(f"GPU 메모리 확인 실패: {e}")
-        return 0
+
 
 # 디바이스 설정 최적화
 available_memory = get_available_gpu_memory()
