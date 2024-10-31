@@ -12,8 +12,8 @@ import re
 # 경로 설정
 data_path = './data'  # 사용자가 제공한 경로
 module_path = './modules'  # 사용자가 제공한 경로
-faiss_index_path = os.path.join(module_path, 'faiss_index1.index') 
-faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index1.index')  
+faiss_index_path = os.path.join(module_path, 'faiss_index_1.index') 
+faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index_1.index')  
 
 jeju_data_path = os.path.join(data_path, "JEJU_DATA.csv")
 jeju_tour_path = os.path.join(data_path, "JEJU_TOUR.csv")
