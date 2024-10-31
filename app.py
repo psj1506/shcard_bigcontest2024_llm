@@ -10,14 +10,19 @@ import logging
 import re
 
 # 경로 설정
-data_path = './data'
-module_path = './modules'
+data_path = r'C:\psj\JEJU_TEST\data'  # 실제 경로로 수정
+module_path = r'C:\psj\JEJU_TEST\modules'  # 실제 경로로 수정
+faiss_index_path = os.path.join(module_path, 'faiss_index.index')  # 파일명 수정
+faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index.index')  # 추가: 관광지 인덱스
+
+jeju_data_path = os.path.join(data_path, "JEJU_DATA.csv")
+jeju_tour_path = os.path.join(data_path, "JEJU_TOUR.csv")
 
 # 로그 설정
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
-# 디바이스 설정 (기존 코드 그대로 유지)
+# 디바이스 설정
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Gemini 모델 설정 (보안 강화)
@@ -26,15 +31,33 @@ genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 데이터 로드 및 필터링
-df = pd.read_csv(os.path.join(data_path, "JEJU_DATA.csv"), encoding='cp949')
-df_tour = pd.read_csv(os.path.join(data_path, "JEJU_TOUR.csv"), encoding='cp949')
-text_tour = df_tour['text'].tolist()
+try:
+    df = pd.read_csv(os.path.join(data_path, "JEJU_DATA.csv"), encoding='cp949')
+    df_tour = pd.read_csv(os.path.join(data_path, "JEJU_TOUR.csv"), encoding='cp949')
+    text_tour = df_tour['text'].tolist()
+    logging.info("데이터 로드 완료.")
+    st.write("데이터 로드 완료.")
+except FileNotFoundError as e:
+    logging.error(f"데이터 파일을 찾을 수 없습니다: {e}")
+    st.error(f"데이터 파일을 찾을 수 없습니다: {e}")
+    st.stop()
+except Exception as e:
+    logging.error(f"데이터 로드 중 오류 발생: {e}")
+    st.error(f"데이터 로드 중 오류가 발생했습니다: {e}")
+    st.stop()
 
 # 최신연월 데이터만 사용
-df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
+try:
+    df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
+    logging.info("최신연월 데이터 필터링 완료.")
+except Exception as e:
+    logging.error(f"최신연월 데이터 필터링 실패: {e}")
+    st.error(f"최신연월 데이터 필터링 중 오류가 발생했습니다: {e}")
+    st.stop()
 
 # 'text' 컬럼 존재 확인
 if 'text' not in df.columns:
+    logging.error("데이터셋에 'text' 컬럼이 없습니다.")
     st.error("데이터셋에 'text' 컬럼이 없습니다.")
     st.stop()
 
@@ -50,7 +73,7 @@ except Exception as e:
     st.stop()
 
 # FAISS 인덱스 로드 함수 정의
-def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')):
+def load_faiss_index(index_path):
     if os.path.exists(index_path):
         try:
             index = faiss.read_index(index_path)
@@ -58,25 +81,29 @@ def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')
             return index
         except Exception as e:
             logging.error(f"FAISS 인덱스 로드 실패: {e}")
+            st.error(f"FAISS 인덱스 로드 실패: {e}")
             return None
     else:
         logging.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
+        st.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
         return None
 
 # FAISS 인덱스 로드
-try:
-    faiss_index = load_faiss_index(os.path.join(module_path, 'faiss_index_1.index'))
-    if faiss_index is not None:
-        logging.info("FAISS 인덱스 로드 완료.")
-        st.write("FAISS 인덱스 로드 완료.")
-    else:
-        st.error("FAISS 인덱스 로드에 실패했습니다.")
-        st.stop()
-except FileNotFoundError as e:
-    st.error(str(e))
+faiss_index = load_faiss_index(faiss_index_path)
+faiss_tour_index = load_faiss_index(faiss_tour_index_path)  # 추가: 관광지 인덱스 로드
+
+if faiss_index is not None:
+    logging.info("FAISS 인덱스 로드 완료.")
+    st.write("FAISS 인덱스 로드 완료.")
+else:
+    st.error("FAISS 인덱스 로드에 실패했습니다.")
     st.stop()
-except Exception as e:
-    st.error(f"FAISS 인덱스 로드 중 오류가 발생했습니다: {e}")
+
+if faiss_tour_index is not None:
+    logging.info("FAISS 관광지 인덱스 로드 완료.")
+    st.write("FAISS 관광지 인덱스 로드 완료.")
+else:
+    st.error("FAISS 관광지 인덱스 로드에 실패했습니다.")
     st.stop()
 
 # FAISS 인덱스와 임베딩 차원 확인
@@ -87,7 +114,13 @@ logging.info(f"FAISS 인덱스 차원: {faiss_dim}")
 # 텍스트 임베딩 생성 함수 정의
 def embed_text(text):
     try:
-        inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True).to(device)
+        inputs = tokenizer(
+            text,
+            return_tensors='pt',
+            padding=True,
+            truncation=True
+            # clean_up_tokenization_spaces=True  # 이 줄을 제거했습니다.
+        ).to(device)
         with torch.no_grad():
             embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
         return embeddings.squeeze().cpu().numpy()
@@ -149,7 +182,7 @@ with st.sidebar:
         '💵 중저가': '중저가',
         '😂 저가': '저가'
     }
-    selected_price = st.sidebar.selectbox("", price_options, key="price")
+    selected_price = st.sidebar.selectbox("", price_options, key="price", label_visibility="collapsed")  # label_visibility 수정
     price = price_mapping.get(selected_price, '상관 없음')
 
     st.markdown(
@@ -273,7 +306,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         return "가장 적합한 가게를 찾는 중 오류가 발생했습니다."
     
     # 관광지 정보 필터링 (필요 시 수정 가능)
-    reference_tour = "\n".join(df_tour['text'].iloc[:1])  # 예시: 첫 번째 관광지 정보
+    reference_tour = "\n".join(text_tour[:1])  # 예시: 첫 번째 관광지 정보
     
     prompt = f"""질문: {question}
 대답시 필요한 내용: 
