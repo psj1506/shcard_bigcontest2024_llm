@@ -10,10 +10,10 @@ import logging
 import re
 
 # 경로 설정
-data_path = r'C:\psj\JEJU_TEST\data'  # 실제 경로로 수정
-module_path = r'C:\psj\JEJU_TEST\modules'  # 실제 경로로 수정
-faiss_index_path = os.path.join(module_path, 'faiss_index.index')  # 파일명 수정
-faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index.index')  # 추가: 관광지 인덱스
+data_path = './data'  # 사용자가 제공한 경로
+module_path = './modules'  # 사용자가 제공한 경로
+faiss_index_path = os.path.join(module_path, 'faiss_index.index')  # 실제 존재하는 파일명
+faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index.index')  # 관광지 인덱스 파일명
 
 jeju_data_path = os.path.join(data_path, "JEJU_DATA.csv")
 jeju_tour_path = os.path.join(data_path, "JEJU_TOUR.csv")
@@ -32,8 +32,8 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 데이터 로드 및 필터링
 try:
-    df = pd.read_csv(os.path.join(data_path, "JEJU_DATA.csv"), encoding='cp949')
-    df_tour = pd.read_csv(os.path.join(data_path, "JEJU_TOUR.csv"), encoding='cp949')
+    df = pd.read_csv(jeju_data_path, encoding='cp949')
+    df_tour = pd.read_csv(jeju_tour_path, encoding='cp949')
     text_tour = df_tour['text'].tolist()
     logging.info("데이터 로드 완료.")
     st.write("데이터 로드 완료.")
@@ -90,7 +90,7 @@ def load_faiss_index(index_path):
 
 # FAISS 인덱스 로드
 faiss_index = load_faiss_index(faiss_index_path)
-faiss_tour_index = load_faiss_index(faiss_tour_index_path)  # 추가: 관광지 인덱스 로드
+faiss_tour_index = load_faiss_index(faiss_tour_index_path)  # 관광지 인덱스 로드
 
 if faiss_index is not None:
     logging.info("FAISS 인덱스 로드 완료.")
@@ -229,7 +229,7 @@ def clear_chat_history():
 st.sidebar.button('대화 초기화 🔄', on_click=clear_chat_history)
 
 # FAISS를 활용한 응답 생성 함수 정의
-def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10, print_prompt=True):
+def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=10, print_prompt=True):
     location, age_group, food_type, price = parse_question(question)
     
     # 필터링 기준이 없을 경우 기본값 설정 또는 사용자에게 추가 정보 요청
@@ -343,7 +343,7 @@ if prompt := st.chat_input():
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("생각 중..."):
-                response = generate_response_with_faiss(prompt, df, faiss_index, model, df_tour, k=10)
+                response = generate_response_with_faiss(prompt, df, faiss_index, model, text_tour, k=10)
                 st.write(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
         
