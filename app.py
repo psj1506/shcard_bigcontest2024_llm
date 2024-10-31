@@ -8,7 +8,7 @@ import streamlit as st
 import google.generativeai as genai
 import logging
 import re
-import pynvml  # GPU 메모리 확인을 위한 라이브러리 추가
+
 
 # 경로 설정
 data_path = './data'
