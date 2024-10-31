@@ -8,7 +8,7 @@ import streamlit as st
 import google.generativeai as genai
 import logging
 import re
-
+import pynvml  # GPU 메모리 확인을 위한 라이브러리 추가
 
 # 경로 설정
 data_path = './data'
@@ -18,12 +18,29 @@ module_path = './modules'
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
+# GPU 메모리 확인 함수
+def get_available_gpu_memory():
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 첫 번째 GPU
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        available_memory = info.free / (1024 ** 3)  # GB 단위
+        pynvml.nvmlShutdown()
+        return available_memory
+    except Exception as e:
+        logging.error(f"GPU 메모리 확인 실패: {e}")
+        return 0
 
+# 디바이스 설정 최적화
+available_memory = get_available_gpu_memory()
+required_memory = 2  # 예: 모델 실행에 필요한 최소 메모리 (GB 단위)
 
-
-# 디바이스 설정
-device = "cuda" if torch.cuda.is_available() else "cpu"
-logging.info(f"디바이스 설정: {device}")
+if torch.cuda.is_available() and available_memory > required_memory:
+    device = "cuda"
+    logging.info("GPU 사용 설정됨.")
+else:
+    device = "cpu"
+    logging.info("CPU 사용 설정됨.")
 
 # Gemini 모델 설정 (보안 강화)
 GOOGLE_API_KEY = st.secrets["API_KEY"]
@@ -98,16 +115,27 @@ def embed_text(text):
 def parse_question(question):
     """
     질문을 파싱하여 필터링 기준을 추출합니다.
-    현재는 위치와 연령대를 추출합니다.
+    현재는 위치, 연령대, 음식 종류, 가격대를 추출합니다.
     필요에 따라 추가적인 필터링 기준을 추출하도록 확장할 수 있습니다.
     """
-    location_match = re.search(r'제주시 한림읍', question)
-    age_group_match = re.search(r'(\d+)대', question)
-    
+    # 위치 패턴: 다양한 위치 패턴을 인식
+    location_pattern = r'([가-힣]+시 [가-힣]+읍|[가-힣]+구 [가-힣]+동)'
+    location_match = re.search(location_pattern, question)
     location = location_match.group() if location_match else None
-    age_group = age_group_match.group(1) if age_group_match else None
     
-    return location, age_group
+    # 연령대 추출: 모든 연령대 추출
+    age_groups = re.findall(r'(\d+)대', question)
+    age_group = age_groups[0] if age_groups else None  # 첫 번째 연령대만 사용
+    
+    # 음식 종류 추출: 예시로 '커피', '디저트', '스테이크' 등
+    food_type_match = re.search(r'(커피|디저트|스테이크|한식|중식|양식|일식)', question)
+    food_type = food_type_match.group() if food_type_match else None
+    
+    # 가격대 추출: 이미 사이드바에서 선택된 가격대 사용
+    # 여기서는 기본적으로 '상관 없음'으로 설정
+    price = '상관 없음'
+    
+    return location, age_group, food_type, price
 
 # Streamlit App UI 설정
 st.set_page_config(page_title="🍊제주도 맛집 추천")
@@ -184,10 +212,11 @@ st.sidebar.button('대화 초기화 🔄', on_click=clear_chat_history)
 
 # FAISS를 활용한 응답 생성 함수 정의
 def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10, print_prompt=True):
-    location, age_group = parse_question(question)
+    location, age_group, food_type, price = parse_question(question)
     
-    if not location:
-        return "질문에서 위치 정보를 찾을 수 없습니다. 다시 입력해주세요."
+    # 필터링 기준이 없을 경우 기본값 설정 또는 사용자에게 추가 정보 요청
+    if not location and not food_type and not age_group:
+        return "검색에 필요한 정보를 찾지 못했습니다. 위치, 연령대, 음식 종류 등을 포함하여 다시 입력해주세요."
     
     # 임베딩 생성
     query_embedding = embed_text(question)
@@ -197,24 +226,21 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
     logging.info(f"Query Embedding Shape: {query_embedding.shape}, Type: {query_embedding.dtype}")
     
-    # FAISS 검색 (전체 필터링된 df에 대해 검색)
+    # FAISS 검색
     try:
         distances, indices = faiss_index.search(query_embedding, k)
         logging.info(f"FAISS 검색 완료: {k}개 결과")
         logging.info(f"Distances: {distances}")
         logging.info(f"Indices: {indices}")
-    except faiss.FaissException as e:
-        logging.error(f"FAISS 검색 실패 (FaissException): {e}")
-        return "FAISS 검색 중 오류가 발생했습니다. (FaissException)"
     except Exception as e:
-        logging.error(f"FAISS 검색 실패 (Exception): {e}")
-        return "FAISS 검색 중 오류가 발생했습니다. (Exception)"
+        logging.error(f"FAISS 검색 실패: {e}")
+        return "FAISS 검색 중 오류가 발생했습니다."
     
     # 검색 결과가 없는 경우
-    if indices.size == 0:
+    if indices.size == 0 or len(indices[0]) == 0:
         return "질문과 일치하는 가게가 없습니다."
     
-    # 검색된 카페들 선택 (필터링된 df 기준)
+    # 검색된 가게들 선택
     try:
         top_cafes = df.iloc[indices[0]].copy()
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
@@ -222,25 +248,29 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10
         logging.error(f"인덱스 초과 오류: {e}")
         return "검색된 결과가 없습니다."
     
-    # 위치 및 가격대에 따른 추가 필터링
-    if price != '상관 없음':
-        filtered_top_cafes = top_cafes[
-            top_cafes['가맹점주소'].str.contains(location) &
-            top_cafes['건당평균이용금액구간'].str.startswith(price_mapping.get(selected_price, '상관 없음'))
-        ]
-    else:
-        filtered_top_cafes = top_cafes[
-            top_cafes['가맹점주소'].str.contains(location)
-        ]
+    # 추가 필터링
+    if location:
+        top_cafes = top_cafes[top_cafes['가맹점주소'].str.contains(location)]
     
-    logging.info(f"Filtered Top Cafes Count: {len(filtered_top_cafes)}")
+    if food_type:
+        top_cafes = top_cafes[top_cafes['업종'].str.contains(food_type)]
     
-    if filtered_top_cafes.empty:
+    if price and price != '상관 없음':
+        top_cafes = top_cafes[top_cafes['건당평균이용금액구간'].str.startswith(price_mapping.get(price, '상관 없음'))]
+    
+    if age_group:
+        # 예시: 30대 이상 비중이 높은 가게로 필터링
+        # 실제 기준에 맞게 수정 필요
+        top_cafes = top_cafes[top_cafes['최근12개월30대회원수비중'] >= 0.3]
+    
+    logging.info(f"추가 필터링 후 카페 수: {len(top_cafes)}")
+    
+    if top_cafes.empty:
         return "질문과 일치하는 가게가 없습니다."
     
     # 가장 높은 30대 이용 비중을 가진 카페 선택
     try:
-        top_cafe = filtered_top_cafes.loc[filtered_top_cafes['최근12개월30대회원수비중'].idxmax()]
+        top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
         reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
         logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
     except Exception as e:
