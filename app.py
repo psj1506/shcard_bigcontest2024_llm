@@ -43,7 +43,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 embedding_model = AutoModel.from_pretrained(model_name).to(device)
 
 # FAISS 인덱스 로드 함수
-def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index_1.index')):
+def load_faiss_index(index_path=os.path.join(module_path, 'faiss_index.index')):
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
         logging.info(f"FAISS 인덱스 로드 성공: {index_path}")
