@@ -13,7 +13,6 @@ module_path = './modules'
 
 # Gemini 모델 설정
 GOOGLE_API_KEY = st.secrets["API_KEY"]
-
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
@@ -25,88 +24,32 @@ text_tour = df_tour['text'].tolist()
 # 최신연월 데이터만 사용
 df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
 
-# Streamlit App UI
-
+# Streamlit App UI 설정
 st.set_page_config(page_title="🍊제주도 맛집 추천")
 
-# Replicate Credentials
+# 사이드바 설정
 with st.sidebar:
     st.title("**🍊제주도 맛집 추천**")
-
-    st.write("")
-    st.markdown("""
-        <style>
-        .sidebar-text {
-        color: #FFEC9D;
-        font-size: 18px;
-        font-weight: bold;
-        }
-     </style>
-     """, unsafe_allow_html=True)
-
     st.sidebar.markdown('<p class="sidebar-text">💵희망 가격대는 어떻게 되시나요??</p>', unsafe_allow_html=True)
-
-
-    price = st.sidebar.selectbox("", ['👌 상관 없음','😎 최고가', '💸 고가', '💰 평균 가격대', '💵 중저가', '😂 저가'], key="price")
-
-    if price == '👌 상관 없음':
-        price = '상관 없음'
-    elif price == '😎 최고가':
-        price = '최고가'
-    elif price == '💸 고가':
-        price = '고가'
-    elif price == '💰 평균 가격대':
-        price = '평균 가격대'
-    elif price == '💵 중저가':
-        price = '중저가'
-    elif price == '😂 저가':
-        price = '저가'
-
-    st.markdown(
-        """
-         <style>
-         [data-testid="stSidebar"] {
-         background-color: #ff9900;
-         }
-         </style>
-        """, unsafe_allow_html=True)
-    st.write("")
+    
+    price_options = ['👌 상관 없음', '😎 최고가', '💸 고가', '💰 평균 가격대', '💵 중저가', '😂 저가']
+    price_mapping = {
+        '👌 상관 없음': '상관 없음',
+        '😎 최고가': '6',
+        '💸 고가': '5',
+        '💰 평균 가격대': ('3', '4'),  # 수정된 부분
+        '💵 중저가': '2',
+        '😂 저가': '1'
+    }
+    selected_price = st.sidebar.selectbox("", price_options, key="price")
+    price = price_mapping.get(selected_price, '상관 없음')
 
 st.title("어서 와용!👋")
 st.subheader("인기 있는 :orange[제주 맛집]🍽️😍 후회는 없을걸?!")
 
-st.write("")
-
-st.write("#흑돼지 #제철 생선회 #해물라면 #스테이크 #한식 #중식 #양식 #일식 #흑백요리사..🤤")
-
-st.write("")
-
-# 이미지 추가
-image_path = "https://pimg.mk.co.kr/news/cms/202409/22/news-p.v1.20240922.a626061476c54127bbe4beb0aa12d050_P1.png"
-image_html = f"""
-<div style="display: flex; justify-content: center;">
-    <img src="{image_path}" alt="centered image" width="70%">
-</div>
-"""
-st.markdown(image_html, unsafe_allow_html=True)
-
-st.write("")
-
 # 대화 상태 초기화
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "어떤 식당 찾으시나요?? 위치, 업종 등을 알려주시면 최고의 맛집 추천해드릴게요!"}]
-
-# 메시지 출력
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
-
-# 챗 기록 초기화 버튼
-def clear_chat_history():
-    st.session_state.messages = [{"role": "assistant", "content": "어떤 식당 찾으시나요?? 위치, 업종 등을 알려주시면 최고의 맛집 추천해드릴게요!"}]
-st.sidebar.button('대화 초기화 🔄', on_click=clear_chat_history)
-
-
 
 # 디바이스 설정
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -131,22 +74,13 @@ def embed_text(text):
         embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
     return embeddings.squeeze().cpu().numpy()
 
-# 텍스트 임베딩 로드
-embeddings = np.load(os.path.join(module_path, 'embeddings_array_file_1.npy'))
-embeddings_tour = np.load(os.path.join(module_path, 'embeddings_tour_array_file_1.npy'))
-
 # FAISS를 활용한 응답 생성
-def generate_response_with_faiss(question, df, embeddings, model, df_tour, embeddings_tour,max_count=10, k=3, print_prompt=True):
+def generate_response_with_faiss(question, df, model, df_tour, k=3, print_prompt=True):
     index = load_faiss_index()
     query_embedding = embed_text(question).reshape(1, -1)
-    distances, indices = index.search(query_embedding, k * 3)
-
-    index_tour = load_faiss_index(index_path=os.path.join(module_path, 'faiss_tour_index_1.index'))
-    query_embedding_tour = embed_text(question).reshape(1, -1)
-    distances_tour, indices_tour = index_tour.search(query_embedding_tour, 1)
+    distances, indices = index.search(query_embedding, k)
 
     filtered_df = df.iloc[indices[0, :]].reset_index(drop=True)
-    filtered_df_tour = df_tour.iloc[indices_tour[0, :]].reset_index(drop=True)
 
     # 희망 가격대 조건을 만족하는 가게들만 필터링
     if price == '상관 없음':
@@ -156,22 +90,18 @@ def generate_response_with_faiss(question, df, embeddings, model, df_tour, embed
     elif price == '고가':
         filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith('5')].reset_index(drop=True)
     elif price == '평균 가격대':
-        filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith('3'or '4')].reset_index(drop=True)
-    elif price == '저가':
+        filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(('3', '4'))].reset_index(drop=True)  # 수정된 부분
+    elif price == '중저가':
         filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith('2')].reset_index(drop=True)
-    elif price == '최저가':
+    elif price == '저가':
         filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith('1')].reset_index(drop=True)
-
-
-    filtered_df = filtered_df.reset_index(drop=True).head(k * 3)
 
     if filtered_df.empty:
         return "질문과 일치하는 가게가 없습니다."
 
     reference_info = "\n".join(filtered_df['text'])
-    reference_tour = "\n".join(filtered_df_tour['text'])
 
-    prompt = f"""질문: {question}\n대답시 필요한 내용: 근처 음식점을 추천할때는 질문에 주소에 대한 정보가 있다면 음식점의 주소가 비슷한지 확인해.\n차로 이동시간이 얼마인지 알려줘. 추천해줄때 이동시간을 고려해서 답변해줘.\n가맹점업종이 커피인 가게는 업종이 카페야. \n대답해줄때 업종별로 가능하면 하나씩 추천해줘. 그리고 추가적으로 그 중에서 가맹점개점일자가 오래되고 이용건수가 많은 음식점(오래된맛집)과 가맹점개점일자가 최근이고 이용건수가 많은 음식점(새로운맛집)을 각각 추천해줬으면 좋겠어.\n참고할 정보: {reference_info}\n참고할 관광지 정보: {reference_tour}\n응답:"""
+    prompt = f"""질문: {question}\n대답시 필요한 내용: {reference_info}\n응답:"""
 
     if print_prompt:
         print('-----------------------------'*3)
@@ -187,10 +117,9 @@ if prompt := st.chat_input():
     with st.chat_message("user"):
         st.write(prompt)
 
-# 사용자가 입력한 질문에 대한 응답 생성
-if st.session_state.messages[-1]["role"] != "assistant":
-    with st.chat_message("assistant"):
-        with st.spinner("생각 중..."):
-            response = generate_response_with_faiss(prompt, df, embeddings, model, df_tour, embeddings_tour)
-            st.write(response)
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    if st.session_state.messages[-1]["role"] != "assistant":
+        with st.chat_message("assistant"):
+            with st.spinner("생각 중..."):
+                response = generate_response_with_faiss(prompt, df, model, df_tour)
+                st.write(response)
+        st.session_state.messages.append({"role": "assistant", "content": response})
