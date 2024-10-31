@@ -174,17 +174,13 @@ except Exception as e:
     st.stop()
 
 # FAISS를 활용한 응답 생성 함수 정의
-def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3, print_prompt=True):
+def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=10, print_prompt=True):
     location, age_group = parse_question(question)
     
     if not location:
         return "질문에서 위치 정보를 찾을 수 없습니다. 다시 입력해주세요."
     
-    # 위치에 따라 데이터 필터링
-    filtered_df = df[df['가맹점주소'].str.contains(location)].copy()
-    logging.info(f"위치 필터링 완료: {location}, 필터링된 데이터 수: {len(filtered_df)}")
-    
-    # 가격대 필터링 로직 수정
+    # 가격대 필터링 (전체 df에 대해 적용)
     if price != '상관 없음':
         price_filter = {
             '최고가': '6',
@@ -195,13 +191,18 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
         }
         if price in price_filter:
             if isinstance(price_filter[price], tuple):
-                # startswith expects a tuple of strings
-                filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
+                # 여러 조건을 OR로 결합
+                filtered_df = df[df['건당평균이용금액구간'].str.startswith(price_filter[price][0]) |
+                                df['건당평균이용금액구간'].str.startswith(price_filter[price][1])]
             else:
-                filtered_df = filtered_df[filtered_df['건당평균이용금액구간'].str.startswith(price_filter[price])].reset_index(drop=True)
+                filtered_df = df[df['건당평균이용금액구간'].str.startswith(price_filter[price])]
             logging.info(f"가격대 필터링 완료: {price}, 필터링된 데이터 수: {len(filtered_df)}")
+        else:
+            filtered_df = df.copy()
+    else:
+        filtered_df = df.copy()
     
-    if len(filtered_df) == 0:
+    if filtered_df.empty:
         return "질문과 일치하는 가게가 없습니다."
     
     # 'text' 컬럼 확인
@@ -215,7 +216,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
     
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
     
-    # FAISS 검색
+    # FAISS 검색 (전체 df에 대해 검색)
     try:
         distances, indices = faiss_index.search(query_embedding, k)
         logging.info(f"FAISS 검색 완료: {k}개 결과")
@@ -227,28 +228,24 @@ def generate_response_with_faiss(question, df, faiss_index, model, df_tour, k=3,
     if indices.size == 0:
         return "질문과 일치하는 가게가 없습니다."
     
-    # 검색된 카페들 선택 (filtered_df를 사용)
+    # 검색된 카페들 선택 (전체 df 기준)
     try:
-        # FAISS 인덱스는 filtered_df에 기반하여 구축되었으므로, indices는 filtered_df의 인덱스를 가리킴
-        # 인덱스가 filtered_df의 범위를 벗어나지 않도록 확인
-        if (indices >= len(filtered_df)).any():
-            logging.error("FAISS 검색 결과의 인덱스가 filtered_df의 범위를 벗어났습니다.")
-            return "검색된 결과가 데이터 범위를 벗어났습니다."
-        
-        top_cafes = filtered_df.iloc[indices[0, :]].copy()
+        top_cafes = df.iloc[indices[0]].copy()
         logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
     except IndexError as e:
         logging.error(f"인덱스 초과 오류: {e}")
         return "검색된 결과가 없습니다."
     
+    # 검색된 결과 중 위치에 맞는 카페 필터링
+    top_cafes = top_cafes[top_cafes['가맹점주소'].str.contains(location)]
+    
+    if top_cafes.empty:
+        return "질문과 일치하는 가게가 없습니다."
+    
     # 가장 높은 30대 이용 비중을 가진 카페 선택
-    if not top_cafes.empty:
-        top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
-        reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
-        logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
-    else:
-        reference_info = "질문과 일치하는 가게가 없습니다."
-        logging.info("검색된 카페가 없습니다.")
+    top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
+    reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
+    logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
     
     # 관광지 정보 필터링 (필요 시 수정 가능)
     reference_tour = "\n".join(df_tour['text'].iloc[:1])  # 예시: 첫 번째 관광지 정보
@@ -287,11 +284,12 @@ if prompt := st.chat_input():
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("생각 중..."):
-                response = generate_response_with_faiss(prompt, df, faiss_index, model, df_tour, k=3)
+                response = generate_response_with_faiss(prompt, df, faiss_index, model, df_tour, k=10)
                 st.write(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
         
         # 로그 기록
         logging.info(f"Question: {prompt}")
-        logging.info(f"Answer: {response}")
+        logging.info(f"Answer: {response}")   
+
 
