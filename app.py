@@ -18,9 +18,7 @@ faiss_tour_index_path = os.path.join(module_path, 'faiss_tour_index_1.index')
 jeju_data_path = os.path.join(data_path, "JEJU_DATA.csv")
 jeju_tour_path = os.path.join(data_path, "JEJU_TOUR.csv")
 
-# 로그 설정
-logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
-                    format='%(asctime)s:%(levelname)s:%(message)s')
+
 
 # 디바이스 설정
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,44 +29,26 @@ genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 데이터 로드 및 필터링
-try:
-    df = pd.read_csv(jeju_data_path, encoding='cp949')
-    df_tour = pd.read_csv(jeju_tour_path, encoding='cp949')
-    text_tour = df_tour['text'].tolist()
-    logging.info("데이터 로드 완료.")
-    st.write("데이터 로드 완료.")
-except FileNotFoundError as e:
-    logging.error(f"데이터 파일을 찾을 수 없습니다: {e}")
-    st.error(f"데이터 파일을 찾을 수 없습니다: {e}")
-    st.stop()
-except Exception as e:
-    logging.error(f"데이터 로드 중 오류 발생: {e}")
-    st.error(f"데이터 로드 중 오류가 발생했습니다: {e}")
-    st.stop()
+
+df = pd.read_csv(jeju_data_path, encoding='cp949')
+df_tour = pd.read_csv(jeju_tour_path, encoding='cp949')
+text_tour = df_tour['text'].tolist()
+    
 
 # 최신연월 데이터만 사용
-try:
-    df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
-    logging.info("최신연월 데이터 필터링 완료.")
-except Exception as e:
-    logging.error(f"최신연월 데이터 필터링 실패: {e}")
-    st.error(f"최신연월 데이터 필터링 중 오류가 발생했습니다: {e}")
-    st.stop()
 
-# 'text' 컬럼 존재 확인
-if 'text' not in df.columns:
-    logging.error("데이터셋에 'text' 컬럼이 없습니다.")
-    st.error("데이터셋에 'text' 컬럼이 없습니다.")
-    st.stop()
+df = df.loc[df.groupby('가맹점명')['기준연월'].idxmax()].reset_index(drop=True)
+
+
 
 # 임베딩 모델 및 토크나이저 로드
 model_name = "jhgan/ko-sroberta-multitask"
 try:
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     embedding_model = AutoModel.from_pretrained(model_name).to(device)
-    logging.info("임베딩 모델 및 토크나이저 로드 완료.")
+    
 except Exception as e:
-    logging.error(f"임베딩 모델 로드 실패: {e}")
+    
     st.error("임베딩 모델 로드 중 오류가 발생했습니다.")
     st.stop()
 
@@ -77,14 +57,14 @@ def load_faiss_index(index_path):
     if os.path.exists(index_path):
         try:
             index = faiss.read_index(index_path)
-            logging.info(f"FAISS 인덱스 로드 성공: {index_path}")
+            
             return index
         except Exception as e:
-            logging.error(f"FAISS 인덱스 로드 실패: {e}")
+            
             st.error(f"FAISS 인덱스 로드 실패: {e}")
             return None
     else:
-        logging.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
+        
         st.error(f"인덱스 파일을 찾을 수 없습니다: {index_path}")
         return None
 
@@ -93,14 +73,14 @@ faiss_index = load_faiss_index(faiss_index_path)
 faiss_tour_index = load_faiss_index(faiss_tour_index_path)  # 관광지 인덱스 로드
 
 if faiss_index is not None:
-    logging.info("FAISS 인덱스 로드 완료.")
+    
     st.write("FAISS 인덱스 로드 완료.")
 else:
     st.error("FAISS 인덱스 로드에 실패했습니다.")
     st.stop()
 
 if faiss_tour_index is not None:
-    logging.info("FAISS 관광지 인덱스 로드 완료.")
+    
     st.write("FAISS 관광지 인덱스 로드 완료.")
 else:
     st.error("FAISS 관광지 인덱스 로드에 실패했습니다.")
@@ -109,7 +89,7 @@ else:
 # FAISS 인덱스와 임베딩 차원 확인
 faiss_dim = faiss_index.d
 st.write(f"FAISS 인덱스 차원: {faiss_dim}")
-logging.info(f"FAISS 인덱스 차원: {faiss_dim}")
+
 
 # 텍스트 임베딩 생성 함수 정의
 def embed_text(text):
@@ -125,7 +105,7 @@ def embed_text(text):
             embeddings = embedding_model(**inputs).last_hidden_state.mean(dim=1)
         return embeddings.squeeze().cpu().numpy()
     except Exception as e:
-        logging.error(f"임베딩 생성 실패: {e}")
+        
         st.error(f"임베딩 생성 실패: {e}")  # 디버깅용
         return None
 
@@ -249,16 +229,14 @@ def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=
         return "임베딩 차원이 FAISS 인덱스와 일치하지 않습니다."
     
     query_embedding = query_embedding.reshape(1, -1).astype('float32')
-    logging.info(f"Query Embedding Shape: {query_embedding.shape}, Type: {query_embedding.dtype}")
+    
     
     # FAISS 검색
     try:
         distances, indices = faiss_index.search(query_embedding, k)
-        logging.info(f"FAISS 검색 완료: {k}개 결과")
-        logging.info(f"Distances: {distances}")
-        logging.info(f"Indices: {indices}")
+        
     except Exception as e:  # 예외 처리 수정
-        logging.error(f"FAISS 검색 실패: {e}")
+       
         st.error(f"FAISS 검색 중 오류가 발생했습니다: {e}")  # 디버깅용
         return "FAISS 검색 중 오류가 발생했습니다."
     
@@ -269,9 +247,9 @@ def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=
     # 검색된 가게들 선택
     try:
         top_cafes = df.iloc[indices[0]].copy()
-        logging.info(f"검색된 카페들: {top_cafes['가맹점명'].tolist()}")
+        
     except IndexError as e:
-        logging.error(f"인덱스 초과 오류: {e}")
+      
         st.error(f"인덱스 초과 오류: {e}")  # 디버깅용
         return "검색된 결과가 없습니다."
     
@@ -290,7 +268,7 @@ def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=
         # 실제 기준에 맞게 수정 필요
         top_cafes = top_cafes[top_cafes['최근12개월30대회원수비중'] >= 0.3]
     
-    logging.info(f"추가 필터링 후 카페 수: {len(top_cafes)}")
+   
     
     if top_cafes.empty:
         return "질문과 일치하는 가게가 없습니다."
@@ -299,9 +277,9 @@ def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=
     try:
         top_cafe = top_cafes.loc[top_cafes['최근12개월30대회원수비중'].idxmax()]
         reference_info = f"{top_cafe['가맹점명']} - {top_cafe['가맹점주소']} - 30대 비중: {top_cafe['최근12개월30대회원수비중'] * 100:.1f}%"
-        logging.info(f"가장 높은 30대 이용 비중 카페 선택: {top_cafe['가맹점명']}")
+        
     except Exception as e:
-        logging.error(f"30대 비중 기준 카페 선택 실패: {e}")
+        
         st.error(f"30대 비중 기준 카페 선택 실패: {e}")  # 디버깅용
         return "가장 적합한 가게를 찾는 중 오류가 발생했습니다."
     
@@ -327,10 +305,10 @@ def generate_response_with_faiss(question, df, faiss_index, model, text_tour, k=
     # 모델 응답 생성
     try:
         response = model.generate_content(prompt)
-        logging.info("모델 응답 생성 완료.")
+       
         return response.text if hasattr(response, 'text') else response
     except Exception as e:
-        logging.error(f"모델 응답 생성 실패: {e}")
+       
         st.error(f"모델 응답 생성 실패: {e}")  # 디버깅용
         return "모델 응답 생성 중 오류가 발생했습니다."
 
@@ -347,6 +325,4 @@ if prompt := st.chat_input():
                 st.write(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
         
-        # 로그 기록
-        logging.info(f"Question: {prompt}")
-        logging.info(f"Answer: {response}")
+      
