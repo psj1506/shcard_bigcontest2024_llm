@@ -18,29 +18,12 @@ module_path = './modules'
 logging.basicConfig(filename='chatbot_logs.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
 
-# GPU 메모리 확인 함수
-def get_available_gpu_memory():
-    try:
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # 첫 번째 GPU
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        available_memory = info.free / (1024 ** 3)  # GB 단위
-        pynvml.nvmlShutdown()
-        return available_memory
-    except Exception as e:
-        logging.error(f"GPU 메모리 확인 실패: {e}")
-        return 0
 
-# 디바이스 설정 최적화
-available_memory = get_available_gpu_memory()
-required_memory = 2  # 예: 모델 실행에 필요한 최소 메모리 (GB 단위)
 
-if torch.cuda.is_available() and available_memory > required_memory:
-    device = "cuda"
-    logging.info("GPU 사용 설정됨.")
-else:
-    device = "cpu"
-    logging.info("CPU 사용 설정됨.")
+
+# 디바이스 설정
+device = "cuda" if torch.cuda.is_available() else "cpu"
+logging.info(f"디바이스 설정: {device}")
 
 # Gemini 모델 설정 (보안 강화)
 GOOGLE_API_KEY = st.secrets["API_KEY"]
